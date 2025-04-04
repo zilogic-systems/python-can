@@ -55,6 +55,8 @@ class CantactBus(BusABC):
         poll_interval: float = 0.01,
         monitor: bool = False,
         timing: Optional[Union[BitTiming, BitTimingFd]] = None,
+        fd: bool = False,
+        data_bitrate: int = 2_000_000,
         **kwargs: Any,
     ) -> None:
         """
@@ -70,6 +72,10 @@ class CantactBus(BusABC):
             `f_clock` value of the timing instance must be set to 24_000_000 (24MHz)
             for standard CAN.
             CAN FD and the :class:`~can.BitTimingFd` class are not supported.
+        :param bool fd:
+            Enables CAN-FD usage.
+        :param int data_bitrate:
+            Data bitrate in bit/s (only if CAN-Fd is enabled).
         """
 
         if kwargs.get("_testing", False):
@@ -102,13 +108,26 @@ class CantactBus(BusABC):
                     int(timing.tseg2),
                     int(timing.sjw),
                 )
-            elif isinstance(timing, BitTimingFd):
-                raise NotImplementedError(
-                    f"CAN FD is not supported by {self.__class__.__name__}."
+            elif isinstance(timing, BitTimingFd) and fd:
+                self.interface.set_bit_timing(
+                    int(channel),
+                    int(timing.nom_brp),
+                    int(timing.nom_tseg1),
+                    int(timing.nom_tseg2),
+                    int(timing.nom_sjw),
+                )
+                self.interface.set_data_bit_timing(
+                    int(channel),
+                    int(timing.data_brp),
+                    int(timing.data_tseg1),
+                    int(timing.data_tseg2),
+                    int(timing.data_sjw),
                 )
             else:
                 # use bitrate
                 self.interface.set_bitrate(int(channel), int(bitrate))
+                if fd:
+                    self.interface.set_data_bitrate(int(channel), int(data_bitrate))
 
             self.interface.set_enabled(int(channel), True)
             self.interface.set_monitor(int(channel), monitor)
@@ -142,14 +161,26 @@ class CantactBus(BusABC):
 
     def send(self, msg, timeout=None):
         with error_check("Cannot send message"):
-            self.interface.send(
-                self.channel,
-                msg.arbitration_id,
-                bool(msg.is_extended_id),
-                bool(msg.is_remote_frame),
-                msg.dlc,
-                msg.data,
-            )
+            if msg.is_fd:
+                self.interface.send_fd(
+                    self.channel,
+                    msg.arbitration_id,
+                    bool(msg.is_extended_id),
+                    bool(msg.is_remote_frame),
+                    bool(msg.is_fd),
+                    bool(msg.bitrate_switch),
+                    msg.dlc,
+                    msg.data,
+                )
+            else:
+                self.interface.send(
+                    self.channel,
+                    msg.arbitration_id,
+                    bool(msg.is_extended_id),
+                    bool(msg.is_remote_frame),
+                    msg.dlc,
+                    msg.data,
+                )
 
     def shutdown(self):
         super().shutdown()
@@ -182,11 +213,14 @@ class MockInterface:
 
     start = Mock()
     set_bitrate = Mock()
+    set_data_bitrate = Mock()
     set_bit_timing = Mock()
+    set_data_bit_timing = Mock()
     set_enabled = Mock()
     set_monitor = Mock()
     stop = Mock()
     send = Mock()
+    send_fd = Mock()
     channel_count = Mock(return_value=1)
 
     recv = Mock(side_effect=mock_recv)
